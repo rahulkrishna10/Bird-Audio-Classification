@@ -1,62 +1,82 @@
-from flask import Flask, render_template, request
-from werkzeug.utils import secure_filename
-import librosa
+import streamlit as st
 import numpy as np
-from keras.models import load_model
+import tensorflow as tf
+import librosa
+import matplotlib.pyplot as plt
+import librosa.display
 
-app = Flask(__name__)
+# Function to read audio file
+def read_file(path):
+    y, _ = librosa.load(path)
+    return y
+
+# Function to convert to dB scale
+def spec_to_db(y):
+    y_db = librosa.amplitude_to_db(y, ref=100)
+    return y_db
+
+# Function to preprocess audio file
+def preprocess_audio(audio_path):
+    # Read audio file
+    y = read_file(audio_path)
+    
+    # Compute spectrogram
+    spectrogram = tf.abs(tf.signal.stft(y, frame_length=512, frame_step=64))
+    
+    # Convert to dB scale
+    spectrogram_db = spec_to_db(spectrogram)
+    spectrogram_db = spectrogram_db / 80 + 1
+    
+    # Expand dimensions to match model input shape
+    spectrogram_db = np.expand_dims(spectrogram_db, axis=0)
+    
+    return spectrogram_db
 
 # Load the trained model
-model = load_model("saved_model.h5")
+model = tf.keras.models.load_model("model.h5")
 
-# Define the allowed file extensions
-ALLOWED_EXTENSIONS = {'wav'}
+# Dictionary to map predicted class indices to bird species names
+class_names = {
+    0: "Bewick's Wren",
+    1: "Northern Mockingbird",
+    2: "American Robin",
+    3: "Song Sparrow",
+    4: "Northern Cardinal"
+}
 
-# Define class_names (replace with your actual class names)
-class_names = ["Bewick's Wren", "Northern Mockingbird", "American Robin", "Song Sparrow", "Northern Cardinal"]
+# Streamlit app
+st.title("Bird Species Classification from Audio")
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# File uploader
+uploaded_file = st.file_uploader("Upload an audio file", type=["wav"])
 
-@app.route('/')
-def landing():
-    return render_template('landing.html')
+predict_button = st.button("Predict")
 
-@app.route('/index')
-def index():
-    return render_template('index.html')
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    if 'file' not in request.files:
-        return render_template('result.html', class_name='No file part')
-
-    file = request.files['file']
-
-    if file.filename == '':
-        return render_template('result.html', class_name='No selected file')
-
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        file_path = "uploads/" + filename
-        file.save(file_path)
-
-        mel_spec = process_audio(file_path)
-        mel_spec = np.expand_dims(mel_spec, axis=0)
-
-        prediction = model.predict(mel_spec)
-        predicted_class = np.argmax(prediction)
-        class_name = class_names[predicted_class]
-
-        return render_template('result.html', class_name=class_name)
-
-    return render_template('result.html', class_name='Invalid file')
-
-def process_audio(audio_file):
-    y, sr = librosa.load(audio_file, duration=10)
-    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr) 
-    mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-    return mel_spec
-
-if __name__ == '__main__':
-    app.run(debug=True)
+# Perform inference when file is uploaded
+if uploaded_file is not None and predict_button:
+    # Preprocess the uploaded audio file
+    audio_data = preprocess_audio(uploaded_file)
+    
+    # Display audio player
+    st.audio(uploaded_file, format='audio/wav', start_time=0)
+    
+    # Display spectrogram
+    fig, ax = plt.subplots(figsize=(10, 4))
+    librosa.display.specshow(audio_data[0], sr=22050, x_axis='time', y_axis='log')
+    plt.colorbar(format='%+2.0f dB')
+    plt.title('Spectrogram')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Frequency (Hz)')
+    st.pyplot(fig)
+    
+    # Perform inference using the model
+    prediction = model.predict(audio_data)
+    
+    # Get the predicted class index
+    predicted_class_index = np.argmax(prediction)
+    
+    # Get the predicted bird species name
+    predicted_species = class_names[predicted_class_index]
+    
+    # Display the predicted bird species
+    st.write(f"Predicted Bird Species: {predicted_species}")
